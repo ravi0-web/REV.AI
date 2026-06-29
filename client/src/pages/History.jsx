@@ -1,6 +1,6 @@
-import { useState, useMemo } from 'react';
-import { Clock, Search, Trash2, Download, Filter } from 'lucide-react';
-import { getHistory, clearHistory, exportToCSV, downloadFile, THEME_ICONS } from '../services/api';
+import { useState, useEffect, useCallback } from 'react';
+import { Search, Trash2, Download, Filter, Loader } from 'lucide-react';
+import { getHistory, clearHistory, searchReviews, exportToCSV, downloadFile, THEME_ICONS } from '../services/api';
 
 function SentimentBadge({ sentiment }) {
   return (
@@ -22,9 +22,11 @@ function ThemeTag({ theme }) {
 }
 
 export default function History() {
-  const [history, setHistory] = useState(() => getHistory());
+  const [history, setHistory] = useState([]);
+  const [filteredHistory, setFilteredHistory] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [sentimentFilter, setSentimentFilter] = useState('all');
+  const [isLoading, setIsLoading] = useState(true);
   const [toast, setToast] = useState(null);
 
   const showToast = (msg, type = 'success') => {
@@ -32,32 +34,76 @@ export default function History() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const filteredHistory = useMemo(() => {
-    let filtered = history;
+  // Load all history from backend on mount
+  useEffect(() => {
+    const loadHistory = async () => {
+      try {
+        setIsLoading(true);
+        const data = await getHistory();
+        setHistory(data);
+        setFilteredHistory(data);
+      } catch (err) {
+        console.error('Failed to load history:', err);
+        showToast('❌ Failed to load review history', 'error');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadHistory();
+  }, []);
 
-    // Sentiment filter
-    if (sentimentFilter !== 'all') {
-      filtered = filtered.filter(r => r.sentiment === sentimentFilter);
+  // Search & filter via backend whenever query or filter changes
+  const applyFilters = useCallback(async () => {
+    // If no filters are active, just show all history
+    if (!searchQuery.trim() && sentimentFilter === 'all') {
+      setFilteredHistory(history);
+      return;
     }
 
-    // Search filter
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      filtered = filtered.filter(r =>
-        r.reviewText.toLowerCase().includes(q) ||
-        r.response.toLowerCase().includes(q) ||
-        r.theme.toLowerCase().includes(q)
-      );
+    try {
+      const results = await searchReviews({
+        q: searchQuery,
+        sentiment: sentimentFilter,
+      });
+      setFilteredHistory(results);
+    } catch (err) {
+      console.error('Search failed:', err);
+      // Fallback: client-side filter
+      let filtered = history;
+      if (sentimentFilter !== 'all') {
+        filtered = filtered.filter(r => r.sentiment === sentimentFilter);
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        filtered = filtered.filter(r =>
+          r.reviewText.toLowerCase().includes(q) ||
+          r.response.toLowerCase().includes(q) ||
+          r.theme.toLowerCase().includes(q)
+        );
+      }
+      setFilteredHistory(filtered);
     }
+  }, [searchQuery, sentimentFilter, history]);
 
-    return filtered;
-  }, [history, sentimentFilter, searchQuery]);
+  // Debounced search — triggers 300ms after user stops typing
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      applyFilters();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [applyFilters]);
 
-  const handleClear = () => {
+  const handleClear = async () => {
     if (window.confirm('Are you sure you want to clear all history? This cannot be undone.')) {
-      clearHistory();
-      setHistory([]);
-      showToast('History cleared', 'success');
+      try {
+        await clearHistory();
+        setHistory([]);
+        setFilteredHistory([]);
+        showToast('History cleared', 'success');
+      } catch (err) {
+        showToast('❌ Failed to clear history', 'error');
+        console.error('Clear history error:', err);
+      }
     }
   };
 
@@ -153,8 +199,18 @@ export default function History() {
           </div>
         </div>
 
+        {/* Loading State */}
+        {isLoading && (
+          <div className="card animate-in animate-in-delay-1">
+            <div className="loading-overlay">
+              <div className="spinner spinner-lg" />
+              <p>Loading review history...</p>
+            </div>
+          </div>
+        )}
+
         {/* Table or Empty State */}
-        {filteredHistory.length > 0 ? (
+        {!isLoading && filteredHistory.length > 0 && (
           <div className="card animate-in animate-in-delay-1" style={{ padding: 0, overflow: 'hidden' }}>
             <div className="table-wrapper">
               <table className="results-table" id="history-table">
@@ -187,7 +243,9 @@ export default function History() {
               </table>
             </div>
           </div>
-        ) : (
+        )}
+
+        {!isLoading && filteredHistory.length === 0 && (
           <div className="card animate-in animate-in-delay-1">
             <div className="empty-state">
               <div className="empty-icon">🕐</div>

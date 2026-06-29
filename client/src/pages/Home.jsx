@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import ReviewForm from '../components/ReviewForm';
 import ResultsTable from '../components/ResultsTable';
-import { analyzeReviews, saveToHistory } from '../services/api';
+import { analyzeReviews } from '../services/api';
 
 export default function Home() {
   const [results, setResults] = useState([]);
@@ -19,9 +19,10 @@ export default function Home() {
     setResults([]);
 
     try {
+      // Calls the backend POST /api/reviews/analyze endpoint
+      // The backend also stores the results automatically
       const analysisResults = await analyzeReviews(reviews);
       setResults(analysisResults);
-      saveToHistory(analysisResults);
 
       const pos = analysisResults.filter(r => r.sentiment === 'positive').length;
       const neg = analysisResults.filter(r => r.sentiment === 'negative').length;
@@ -30,7 +31,7 @@ export default function Home() {
         'success'
       );
     } catch (err) {
-      showToast('❌ Analysis failed. Please try again.', 'error');
+      showToast(`❌ ${err.message || 'Analysis failed. Please try again.'}`, 'error');
       console.error('Analysis error:', err);
     } finally {
       setIsLoading(false);

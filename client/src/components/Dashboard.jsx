@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { Pie, Bar } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -23,8 +23,47 @@ import { useTheme } from '../context/ThemeContext';
 ChartJS.register(ArcElement, CategoryScale, LinearScale, BarElement, Tooltip, Legend);
 
 export default function Dashboard() {
-  const data = useMemo(() => getDashboardData(), []);
+  const [data, setData] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
   const { theme } = useTheme();
+
+  // Fetch dashboard stats from the backend on mount
+  useEffect(() => {
+    const loadStats = async () => {
+      try {
+        setIsLoading(true);
+        const stats = await getDashboardData();
+        setData(stats);
+      } catch (err) {
+        console.error('Failed to load dashboard data:', err);
+        // Fallback to empty data
+        setData({ total: 0, sentimentCounts: { positive: 0, neutral: 0, negative: 0 }, themeCounts: { food: 0, host: 0, location: 0, cleanliness: 0, value: 0, experience: 0 } });
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadStats();
+  }, []);
+
+  // Loading state
+  if (isLoading || !data) {
+    return (
+      <div className="page-wrapper">
+        <div className="container">
+          <div className="hero" style={{ paddingBottom: 'var(--space-xl)' }}>
+            <h1 style={{ fontSize: '2rem' }}>📊 Analytics Dashboard</h1>
+            <p>Visualize trends across all analyzed reviews</p>
+          </div>
+          <div className="card">
+            <div className="loading-overlay">
+              <div className="spinner spinner-lg" />
+              <p>Loading dashboard data...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const { total, sentimentCounts, themeCounts } = data;
   const isDark = theme === 'dark';

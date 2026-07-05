@@ -39,7 +39,8 @@ export default function History() {
     const loadHistory = async () => {
       try {
         setIsLoading(true);
-        const data = await getHistory();
+        const result = await getHistory({ page: 1, limit: 100 });
+        const data = result.data || [];
         setHistory(data);
         setFilteredHistory(data);
       } catch (err) {
@@ -61,11 +62,12 @@ export default function History() {
     }
 
     try {
-      const results = await searchReviews({
+      const result = await searchReviews({
         q: searchQuery,
         sentiment: sentimentFilter,
+        limit: 100,
       });
-      setFilteredHistory(results);
+      setFilteredHistory(result.data || []);
     } catch (err) {
       console.error('Search failed:', err);
       // Fallback: client-side filter
@@ -226,7 +228,7 @@ export default function History() {
                 </thead>
                 <tbody>
                   {filteredHistory.map((item, idx) => (
-                    <tr key={item.id || idx}>
+                    <tr key={item._id || item.id || idx}>
                       <td className="cell-number">{idx + 1}</td>
                       <td className="review-text-cell">
                         <div className="truncated">{item.reviewText}</div>

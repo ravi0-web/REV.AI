@@ -1,51 +1,61 @@
 /**
  * Review Routes — Rev.AI
  *
- * Defines all 7 REST API endpoints for review operations.
+ * Defines all 8 REST API endpoints for review operations.
  * Routes are mounted at /api/reviews in server.js.
  *
- * IMPORTANT: Static routes (like /stats, /search) MUST come
- * before the dynamic /:id route, otherwise Express will try
- * to match "stats" or "search" as an ID parameter.
+ * IMPORTANT: Static routes (like /stats, /search, /filter) MUST come
+ * before the dynamic /:id route, otherwise Express will try to match
+ * "stats", "search", or "filter" as an ID parameter.
  */
 
-const express = require('express');
-const router = express.Router();
+const express           = require('express');
+const router            = express.Router();
+const validateObjectId  = require('../middleware/validateObjectId');
+
 const {
   analyzeReviews,
   getAllReviews,
   getStats,
   searchReviews,
+  filterReviews,
   getReviewById,
   deleteReview,
   clearAllReviews,
 } = require('../controllers/reviewController');
 
-// ── Static routes first ──────────────────────
+// ── Static routes first ───────────────────────────────────
 
-// POST   /api/reviews/analyze   → Submit & analyze reviews
+// POST   /api/reviews/analyze   → Submit & analyze reviews, save to MongoDB
 router.post('/analyze', analyzeReviews);
 
-// GET    /api/reviews/stats     → Dashboard statistics
+// GET    /api/reviews/stats     → Aggregated dashboard statistics
 router.get('/stats', getStats);
 
-// GET    /api/reviews/search    → Search & filter reviews
+// GET    /api/reviews/search    → Full-text search + filter
+//   Query: ?q=keyword&sentiment=positive&theme=food&page=1&limit=20
 router.get('/search', searchReviews);
 
-// ── Base routes ──────────────────────────────
+// GET    /api/reviews/filter    → Filter by sentiment/theme with pagination
+//   Query: ?sentiment=positive&theme=food&page=1&limit=20&sort=-analyzedAt
+router.get('/filter', filterReviews);
 
-// GET    /api/reviews           → Get all review history
+// ── Base routes ───────────────────────────────────────────
+
+// GET    /api/reviews           → Get all reviews (paginated, sorted)
+//   Query: ?page=1&limit=20&sort=-analyzedAt
 router.get('/', getAllReviews);
 
-// DELETE /api/reviews           → Clear all history
+// DELETE /api/reviews           → Clear all review history
 router.delete('/', clearAllReviews);
 
-// ── Dynamic :id routes last ──────────────────
+// ── Dynamic :id routes last ───────────────────────────────
+// validateObjectId runs before the controller to catch bad IDs early
 
-// GET    /api/reviews/:id       → Get single review
-router.get('/:id', getReviewById);
+// GET    /api/reviews/:id       → Get single review by MongoDB ObjectId
+router.get('/:id', validateObjectId, getReviewById);
 
-// DELETE /api/reviews/:id       → Delete single review
-router.delete('/:id', deleteReview);
+// DELETE /api/reviews/:id       → Delete single review by MongoDB ObjectId
+router.delete('/:id', validateObjectId, deleteReview);
 
 module.exports = router;

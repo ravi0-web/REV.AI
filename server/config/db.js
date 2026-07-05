@@ -1,137 +1,65 @@
 /**
- * In-Memory Data Store for Rev.AI
- * 
- * Acts as a temporary database using a plain array.
- * All CRUD operations go through these helper functions,
- * making it easy to swap with MongoDB/Mongoose later.
+ * MongoDB Connection — Rev.AI
+ *
+ * Connects to MongoDB Atlas using Mongoose.
+ * The MONGO_URI must be set in the .env file.
+ * Never hardcode credentials here.
  */
 
-// The in-memory "database" — an array of review objects
-let reviews = [];
+const mongoose = require('mongoose');
 
 /**
- * Get all reviews, sorted by date (newest first).
- * @returns {Array} All stored reviews
+ * Connect to MongoDB Atlas.
+ * Exits the process if the connection cannot be established.
+ *
+ * @returns {Promise<void>}
  */
-const getAllReviews = () => {
-  return [...reviews].sort(
-    (a, b) => new Date(b.analyzedAt) - new Date(a.analyzedAt)
-  );
-};
+const connectDB = async () => {
+  const uri = process.env.MONGO_URI;
 
-/**
- * Find a single review by its ID.
- * @param {string} id - The review UUID
- * @returns {Object|undefined} The matching review or undefined
- */
-const getReviewById = (id) => {
-  return reviews.find((r) => r.id === id);
-};
-
-/**
- * Add one or more reviews to the store.
- * @param {Array} newReviews - Array of review objects to insert
- * @returns {Array} The inserted reviews
- */
-const addReviews = (newReviews) => {
-  reviews.push(...newReviews);
-  return newReviews;
-};
-
-/**
- * Delete a single review by ID.
- * @param {string} id - The review UUID
- * @returns {boolean} True if deleted, false if not found
- */
-const deleteReview = (id) => {
-  const index = reviews.findIndex((r) => r.id === id);
-  if (index === -1) return false;
-  reviews.splice(index, 1);
-  return true;
-};
-
-/**
- * Clear all reviews from the store.
- * @returns {number} The count of deleted reviews
- */
-const clearAllReviews = () => {
-  const count = reviews.length;
-  reviews = [];
-  return count;
-};
-
-/**
- * Search and filter reviews.
- * @param {Object} filters - { q, sentiment, theme }
- * @returns {Array} Filtered reviews sorted by date (newest first)
- */
-const searchReviews = ({ q, sentiment, theme }) => {
-  let filtered = [...reviews];
-
-  // Filter by sentiment
-  if (sentiment && sentiment !== 'all') {
-    filtered = filtered.filter((r) => r.sentiment === sentiment);
+  if (!uri) {
+    console.error('❌  MONGO_URI is not defined in the .env file.');
+    process.exit(1);
   }
 
-  // Filter by theme
-  if (theme && theme !== 'all') {
-    filtered = filtered.filter((r) => r.theme === theme);
-  }
+  try {
+    const conn = await mongoose.connect(uri, {
+      serverSelectionTimeoutMS: 30000,
+      socketTimeoutMS: 45000,
+      connectTimeoutMS: 30000,
+      family: 4, // Force IPv4 — fixes Node.js SRV DNS resolution on Windows
+    });
 
-  // Search by keyword in reviewText, response, or theme
-  if (q && q.trim()) {
-    const query = q.toLowerCase().trim();
-    filtered = filtered.filter(
-      (r) =>
-        r.reviewText.toLowerCase().includes(query) ||
-        r.response.toLowerCase().includes(query) ||
-        r.theme.toLowerCase().includes(query)
-    );
-  }
+    console.log(`✅  MongoDB connected: ${conn.connection.host}`);
 
-  // Sort newest first
-  return filtered.sort(
-    (a, b) => new Date(b.analyzedAt) - new Date(a.analyzedAt)
-  );
+    // ── Connection event listeners ──────────────────
+    mongoose.connection.on('disconnected', () => {
+      console.warn('⚠️   MongoDB disconnected. Attempting to reconnect...');
+    });
+
+    mongoose.connection.on('reconnected', () => {
+      console.log('🔄  MongoDB reconnected successfully.');
+    });
+
+    mongoose.connection.on('error', (err) => {
+      console.error('❌  MongoDB connection error:', err.message);
+    });
+
+  } catch (err) {
+    console.error('❌  Failed to connect to MongoDB:', err.message);
+    process.exit(1);
+  }
 };
 
 /**
- * Get aggregate statistics for the dashboard.
- * @returns {Object} { total, sentimentCounts, themeCounts }
+ * Gracefully close the MongoDB connection.
+ * Call this on SIGTERM / SIGINT.
+ *
+ * @returns {Promise<void>}
  */
-const getStats = () => {
-  const sentimentCounts = { positive: 0, neutral: 0, negative: 0 };
-  const themeCounts = {
-    food: 0,
-    host: 0,
-    location: 0,
-    cleanliness: 0,
-    value: 0,
-    experience: 0,
-  };
-
-  reviews.forEach((item) => {
-    if (sentimentCounts[item.sentiment] !== undefined) {
-      sentimentCounts[item.sentiment]++;
-    }
-    if (themeCounts[item.theme] !== undefined) {
-      themeCounts[item.theme]++;
-    }
-  });
-
-  return {
-    total: reviews.length,
-    sentimentCounts,
-    themeCounts,
-  };
+const disconnectDB = async () => {
+  await mongoose.connection.close();
+  console.log('🔌  MongoDB connection closed.');
 };
 
-module.exports = {
-  getAllReviews,
-  getReviewById,
-  addReviews,
-  deleteReview,
-  clearAllReviews,
-  searchReviews,
-  getStats,
-};
+module.exports = { connectDB, disconnectDB };

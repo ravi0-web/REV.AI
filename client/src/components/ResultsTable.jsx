@@ -118,7 +118,7 @@ export default function ResultsTable({ results }) {
               const isLong = result.reviewText.length > 150;
 
               return (
-                <tr key={result.id || idx}>
+                <tr key={result._id || idx}>
                   <td className="cell-number">{idx + 1}</td>
                   <td className="review-text-cell">
                     <div className={isLong && !isExpanded ? 'truncated' : ''}>

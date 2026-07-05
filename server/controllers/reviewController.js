@@ -1,225 +1,261 @@
 /**
  * Review Controller — Rev.AI
  *
- * Handles all business logic for the 7 review API endpoints.
- * Each handler receives (req, res, next) and uses the data store
- * and gemini service to process requests.
+ * All business logic for the review API endpoints.
+ * Uses MongoDB/Mongoose for persistence (replaces in-memory array).
+ * Every handler is wrapped with asyncWrapper for error forwarding.
+ *
+ * Routes are defined in routes/reviewRoutes.js.
  */
 
-const db = require('../config/db');
+const { Review, validateReviewText, THEME_ICONS, VALID_SENTIMENTS, VALID_THEMES } = require('../models/Review');
 const { analyzeReview } = require('../services/geminiService');
-const { createReview, validateReviewText } = require('../models/Review');
+const { asyncWrapper }  = require('../middleware/errorHandler');
+const { sendSuccess, sendError } = require('../utils/apiResponse');
+const { parsePagination, buildPaginationMeta } = require('../utils/pagination');
 
-// ──────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────
 //  1. POST /api/reviews/analyze
-//     Submit and analyze one or more reviews
-//     Status: 201 (created) | 400 (bad request)
-// ──────────────────────────────────────────────
-const analyzeReviews = (req, res, next) => {
-  try {
-    const { reviews } = req.body;
+//     Submit and analyze one or more reviews, then persist to MongoDB.
+//     Status: 201 | 400
+// ──────────────────────────────────────────────────────────
+const analyzeReviews = asyncWrapper(async (req, res) => {
+  const { reviews } = req.body;
 
-    // Validate that reviews is a non-empty array
-    if (!reviews || !Array.isArray(reviews) || reviews.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Request body must include a "reviews" array with at least one review string.',
-      });
-    }
-
-    // Cap batch size at 50 reviews
-    if (reviews.length > 50) {
-      return res.status(400).json({
-        success: false,
-        error: 'Maximum 50 reviews per batch. Please split your request.',
-      });
-    }
-
-    // Validate each review text
-    const errors = [];
-    reviews.forEach((text, index) => {
-      const validation = validateReviewText(text);
-      if (!validation.valid) {
-        errors.push(`Review #${index + 1}: ${validation.error}`);
-      }
-    });
-
-    if (errors.length > 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Some reviews failed validation.',
-        details: errors,
-      });
-    }
-
-    // Analyze each review and build result objects
-    const results = reviews
-      .map((text) => text.trim())
-      .filter((text) => text.length > 0)
-      .map((text) => {
-        const analysis = analyzeReview(text);
-        return createReview(text, analysis);
-      });
-
-    // Store in the in-memory database
-    db.addReviews(results);
-
-    // Return 201 Created with the results
-    return res.status(201).json({
-      success: true,
-      count: results.length,
-      data: results,
-    });
-  } catch (err) {
-    next(err);
+  // Validate reviews array
+  if (!reviews || !Array.isArray(reviews) || reviews.length === 0) {
+    return sendError(
+      res,
+      'Request body must include a "reviews" array with at least one review string.',
+      400
+    );
   }
-};
 
-// ──────────────────────────────────────────────
+  if (reviews.length > 50) {
+    return sendError(res, 'Maximum 50 reviews per batch. Please split your request.', 400);
+  }
+
+  // Validate each review text
+  const errors = [];
+  reviews.forEach((text, index) => {
+    const validation = validateReviewText(text);
+    if (!validation.valid) {
+      errors.push(`Review #${index + 1}: ${validation.error}`);
+    }
+  });
+
+  if (errors.length > 0) {
+    return sendError(res, 'Some reviews failed validation.', 400, errors);
+  }
+
+  // Analyze each review and build document objects
+  const documents = reviews
+    .map((text) => text.trim())
+    .filter((text) => text.length > 0)
+    .map((text) => {
+      const analysis = analyzeReview(text);
+      return {
+        reviewText: text,
+        sentiment:  analysis.sentiment,
+        theme:      analysis.theme,
+        themeIcon:  THEME_ICONS[analysis.theme] || '🏷️',
+        response:   analysis.response,
+        analyzedAt: new Date(),
+      };
+    });
+
+  // Bulk insert into MongoDB
+  const savedReviews = await Review.insertMany(documents, { ordered: false });
+
+  return sendSuccess(res, savedReviews, 201, { count: savedReviews.length });
+});
+
+// ──────────────────────────────────────────────────────────
 //  2. GET /api/reviews
-//     Retrieve all stored reviews (newest first)
+//     Retrieve all stored reviews with pagination & sorting.
+//     Query params: ?page=1&limit=20&sort=-analyzedAt
 //     Status: 200
-// ──────────────────────────────────────────────
-const getAllReviews = (req, res, next) => {
-  try {
-    const reviews = db.getAllReviews();
+// ──────────────────────────────────────────────────────────
+const getAllReviews = asyncWrapper(async (req, res) => {
+  const { page, limit, skip, sort } = parsePagination(req.query);
 
-    return res.status(200).json({
-      success: true,
-      count: reviews.length,
-      data: reviews,
-    });
-  } catch (err) {
-    next(err);
-  }
-};
+  // Run count and find in parallel for efficiency
+  const [total, reviews] = await Promise.all([
+    Review.countDocuments(),
+    Review.find().sort(sort).skip(skip).limit(limit).lean(),
+  ]);
 
-// ──────────────────────────────────────────────
+  const meta = buildPaginationMeta(total, page, limit);
+  return sendSuccess(res, reviews, 200, meta);
+});
+
+// ──────────────────────────────────────────────────────────
 //  3. GET /api/reviews/stats
-//     Get aggregate dashboard statistics
+//     Aggregate dashboard statistics via MongoDB pipeline.
 //     Status: 200
-// ──────────────────────────────────────────────
-const getStats = (req, res, next) => {
-  try {
-    const stats = db.getStats();
+// ──────────────────────────────────────────────────────────
+const getStats = asyncWrapper(async (req, res) => {
+  const [totalResult, sentimentResult, themeResult] = await Promise.all([
+    Review.countDocuments(),
+    Review.aggregate([
+      { $group: { _id: '$sentiment', count: { $sum: 1 } } },
+    ]),
+    Review.aggregate([
+      { $group: { _id: '$theme', count: { $sum: 1 } } },
+    ]),
+  ]);
 
-    return res.status(200).json({
-      success: true,
-      data: stats,
-    });
-  } catch (err) {
-    next(err);
-  }
-};
+  // Build sentimentCounts object
+  const sentimentCounts = { positive: 0, neutral: 0, negative: 0 };
+  sentimentResult.forEach(({ _id, count }) => {
+    if (_id in sentimentCounts) sentimentCounts[_id] = count;
+  });
 
-// ──────────────────────────────────────────────
-//  4. GET /api/reviews/search?q=&sentiment=&theme=
-//     Search and filter reviews
+  // Build themeCounts object
+  const themeCounts = { food: 0, host: 0, location: 0, cleanliness: 0, value: 0, experience: 0 };
+  themeResult.forEach(({ _id, count }) => {
+    if (_id in themeCounts) themeCounts[_id] = count;
+  });
+
+  return sendSuccess(res, { total: totalResult, sentimentCounts, themeCounts });
+});
+
+// ──────────────────────────────────────────────────────────
+//  4. GET /api/reviews/search?q=&sentiment=&theme=&page=&limit=
+//     Full-text search + filter via MongoDB text index.
 //     Status: 200 | 400
-// ──────────────────────────────────────────────
-const searchReviews = (req, res, next) => {
-  try {
-    const { q, sentiment, theme } = req.query;
+// ──────────────────────────────────────────────────────────
+const searchReviews = asyncWrapper(async (req, res) => {
+  const { q, sentiment, theme } = req.query;
+  const { page, limit, skip, sort } = parsePagination(req.query);
 
-    // Validate sentiment filter if provided
-    if (sentiment && !['all', 'positive', 'neutral', 'negative'].includes(sentiment)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid sentiment filter. Use: all, positive, neutral, or negative.',
-      });
-    }
-
-    // Validate theme filter if provided
-    if (theme && !['all', 'food', 'host', 'location', 'cleanliness', 'value', 'experience'].includes(theme)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid theme filter. Use: all, food, host, location, cleanliness, value, or experience.',
-      });
-    }
-
-    const results = db.searchReviews({ q, sentiment, theme });
-
-    return res.status(200).json({
-      success: true,
-      count: results.length,
-      data: results,
-    });
-  } catch (err) {
-    next(err);
+  // Validate sentiment filter
+  if (sentiment && !['all', ...VALID_SENTIMENTS].includes(sentiment)) {
+    return sendError(
+      res,
+      `Invalid sentiment. Use one of: all, ${VALID_SENTIMENTS.join(', ')}.`,
+      400
+    );
   }
-};
 
-// ──────────────────────────────────────────────
-//  5. GET /api/reviews/:id
-//     Get a single review by ID
-//     Status: 200 | 404
-// ──────────────────────────────────────────────
-const getReviewById = (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const review = db.getReviewById(id);
-
-    if (!review) {
-      return res.status(404).json({
-        success: false,
-        error: `Review with ID "${id}" not found.`,
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: review,
-    });
-  } catch (err) {
-    next(err);
+  // Validate theme filter
+  if (theme && !['all', ...VALID_THEMES].includes(theme)) {
+    return sendError(
+      res,
+      `Invalid theme. Use one of: all, ${VALID_THEMES.join(', ')}.`,
+      400
+    );
   }
-};
 
-// ──────────────────────────────────────────────
-//  6. DELETE /api/reviews/:id
-//     Delete a single review by ID
-//     Status: 204 | 404
-// ──────────────────────────────────────────────
-const deleteReview = (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const deleted = db.deleteReview(id);
+  // Build query object
+  const query = {};
 
-    if (!deleted) {
-      return res.status(404).json({
-        success: false,
-        error: `Review with ID "${id}" not found.`,
-      });
-    }
-
-    // 204 No Content — successful deletion
-    return res.status(204).send();
-  } catch (err) {
-    next(err);
+  if (q && q.trim()) {
+    // Use MongoDB text index for full-text search
+    query.$text = { $search: q.trim() };
   }
-};
+  if (sentiment && sentiment !== 'all') query.sentiment = sentiment;
+  if (theme     && theme     !== 'all') query.theme     = theme;
 
-// ──────────────────────────────────────────────
-//  7. DELETE /api/reviews
-//     Clear all review history
-//     Status: 204
-// ──────────────────────────────────────────────
-const clearAllReviews = (req, res, next) => {
-  try {
-    db.clearAllReviews();
+  const [total, reviews] = await Promise.all([
+    Review.countDocuments(query),
+    Review.find(query).sort(sort).skip(skip).limit(limit).lean(),
+  ]);
 
-    // 204 No Content — all cleared
-    return res.status(204).send();
-  } catch (err) {
-    next(err);
+  const meta = buildPaginationMeta(total, page, limit);
+  return sendSuccess(res, reviews, 200, meta);
+});
+
+// ──────────────────────────────────────────────────────────
+//  5. GET /api/reviews/filter?sentiment=&theme=&page=&limit=&sort=
+//     Filter reviews by sentiment and/or theme with pagination.
+//     Bonus endpoint (structured alternative to /search).
+//     Status: 200 | 400
+// ──────────────────────────────────────────────────────────
+const filterReviews = asyncWrapper(async (req, res) => {
+  const { sentiment, theme } = req.query;
+  const { page, limit, skip, sort } = parsePagination(req.query);
+
+  // Validate
+  if (sentiment && !['all', ...VALID_SENTIMENTS].includes(sentiment)) {
+    return sendError(
+      res,
+      `Invalid sentiment. Use one of: all, ${VALID_SENTIMENTS.join(', ')}.`,
+      400
+    );
   }
-};
+  if (theme && !['all', ...VALID_THEMES].includes(theme)) {
+    return sendError(
+      res,
+      `Invalid theme. Use one of: all, ${VALID_THEMES.join(', ')}.`,
+      400
+    );
+  }
+
+  // Build filter
+  const filter = {};
+  if (sentiment && sentiment !== 'all') filter.sentiment = sentiment;
+  if (theme     && theme     !== 'all') filter.theme     = theme;
+
+  const [total, reviews] = await Promise.all([
+    Review.countDocuments(filter),
+    Review.find(filter).sort(sort).skip(skip).limit(limit).lean(),
+  ]);
+
+  const meta = buildPaginationMeta(total, page, limit);
+  return sendSuccess(res, reviews, 200, meta);
+});
+
+// ──────────────────────────────────────────────────────────
+//  6. GET /api/reviews/:id
+//     Get a single review by MongoDB ObjectId.
+//     Status: 200 | 400 | 404
+// ──────────────────────────────────────────────────────────
+const getReviewById = asyncWrapper(async (req, res) => {
+  const review = await Review.findById(req.params.id).lean();
+
+  if (!review) {
+    return sendError(res, `Review with ID "${req.params.id}" not found.`, 404);
+  }
+
+  return sendSuccess(res, review);
+});
+
+// ──────────────────────────────────────────────────────────
+//  7. DELETE /api/reviews/:id
+//     Delete a single review by MongoDB ObjectId.
+//     Status: 204 | 400 | 404
+// ──────────────────────────────────────────────────────────
+const deleteReview = asyncWrapper(async (req, res) => {
+  const review = await Review.findByIdAndDelete(req.params.id).lean();
+
+  if (!review) {
+    return sendError(res, `Review with ID "${req.params.id}" not found.`, 404);
+  }
+
+  // 204 No Content — successful deletion, no body
+  return res.status(204).send();
+});
+
+// ──────────────────────────────────────────────────────────
+//  8. DELETE /api/reviews
+//     Clear all review history.
+//     Status: 200
+// ──────────────────────────────────────────────────────────
+const clearAllReviews = asyncWrapper(async (req, res) => {
+  const result = await Review.deleteMany({});
+  return sendSuccess(res, null, 200, {
+    deleted: result.deletedCount,
+    message: `Successfully deleted ${result.deletedCount} review(s).`,
+  });
+});
 
 module.exports = {
   analyzeReviews,
   getAllReviews,
   getStats,
   searchReviews,
+  filterReviews,
   getReviewById,
   deleteReview,
   clearAllReviews,

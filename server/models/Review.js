@@ -1,48 +1,83 @@
 /**
  * Review Model — Rev.AI
  *
- * Defines the data shape for a review document and provides
- * a factory function + validation. When MongoDB is added,
- * this will become a Mongoose schema.
+ * Mongoose schema for a guest review document.
+ * Replaces the previous plain-object factory.
+ * A virtual `id` field maps _id → id for frontend compatibility.
  */
 
-const { v4: uuidv4 } = require('uuid');
+const mongoose = require('mongoose');
 
-// Theme icon mapping (matches frontend)
+// ── Constants (shared with frontend) ─────────────────────
 const THEME_ICONS = {
-  food: '🍽️',
-  host: '👤',
-  location: '📍',
+  food:        '🍽️',
+  host:        '👤',
+  location:    '📍',
   cleanliness: '✨',
-  value: '💰',
-  experience: '⭐',
+  value:       '💰',
+  experience:  '⭐',
 };
 
-// Valid values for validation
 const VALID_SENTIMENTS = ['positive', 'neutral', 'negative'];
-const VALID_THEMES = ['food', 'host', 'location', 'cleanliness', 'value', 'experience'];
+const VALID_THEMES     = ['food', 'host', 'location', 'cleanliness', 'value', 'experience'];
 
-/**
- * Create a new Review object from raw text and analysis results.
- *
- * @param {string} reviewText - The original guest review
- * @param {Object} analysis - { sentiment, theme, response } from geminiService
- * @returns {Object} A complete review document
- */
-function createReview(reviewText, analysis) {
-  return {
-    id: uuidv4(),
-    reviewText: reviewText.trim(),
-    sentiment: analysis.sentiment,
-    theme: analysis.theme,
-    themeIcon: THEME_ICONS[analysis.theme] || '🏷️',
-    response: analysis.response,
-    analyzedAt: new Date().toISOString(),
-  };
-}
+// ── Schema ───────────────────────────────────────────────
+const ReviewSchema = new mongoose.Schema(
+  {
+    reviewText: {
+      type:      String,
+      required:  [true, 'Review text is required'],
+      trim:      true,
+      minlength: [5,    'Review text must be at least 5 characters'],
+      maxlength: [5000, 'Review text cannot exceed 5000 characters'],
+    },
+    sentiment: {
+      type:     String,
+      required: [true, 'Sentiment is required'],
+      enum: {
+        values:  VALID_SENTIMENTS,
+        message: 'Sentiment must be positive, neutral, or negative',
+      },
+    },
+    theme: {
+      type:     String,
+      required: [true, 'Theme is required'],
+      enum: {
+        values:  VALID_THEMES,
+        message: `Theme must be one of: ${VALID_THEMES.join(', ')}`,
+      },
+    },
+    themeIcon: {
+      type:    String,
+      default: '🏷️',
+    },
+    response: {
+      type:     String,
+      required: [true, 'Response is required'],
+      trim:     true,
+    },
+    analyzedAt: {
+      type:    Date,
+      default: Date.now,
+    },
+  },
+  {
+    timestamps: true, // adds createdAt + updatedAt
+    toJSON:     { virtuals: true },
+    toObject:   { virtuals: true },
+  }
+);
 
+// ── Indexes ──────────────────────────────────────────────
+// Text index for full-text search on reviewText, response, and theme
+ReviewSchema.index({ reviewText: 'text', response: 'text', theme: 'text' });
+
+// Compound index for common filter queries
+ReviewSchema.index({ sentiment: 1, theme: 1, analyzedAt: -1 });
+
+// ── Validation helper (used by controller) ───────────────
 /**
- * Validate that a review text is a non-empty string.
+ * Validate that a review text is a non-empty string within limits.
  *
  * @param {*} text - The value to validate
  * @returns {{ valid: boolean, error?: string }}
@@ -54,14 +89,19 @@ function validateReviewText(text) {
   if (text.trim().length === 0) {
     return { valid: false, error: 'Review text cannot be empty' };
   }
+  if (text.trim().length < 5) {
+    return { valid: false, error: 'Review text must be at least 5 characters' };
+  }
   if (text.trim().length > 5000) {
     return { valid: false, error: 'Review text cannot exceed 5000 characters' };
   }
   return { valid: true };
 }
 
+const Review = mongoose.model('Review', ReviewSchema);
+
 module.exports = {
-  createReview,
+  Review,
   validateReviewText,
   THEME_ICONS,
   VALID_SENTIMENTS,

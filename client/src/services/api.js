@@ -1,27 +1,68 @@
 /**
  * Rev.AI — API Service Layer
  *
- * Connects the React frontend to the Express.js backend.
- * All review analysis, history, and dashboard data now comes
- * from the server via REST API calls.
+ * Connects the React frontend to the Express.js backend (MongoDB-powered).
+ * All review analysis, history, and dashboard data comes from the server.
  *
  * Client-only utilities (CSV export, file download) remain here.
  */
 
 // ── Base URL ─────────────────────────────────
 // In development, Vite proxies /api to http://localhost:5000
-// In production, the backend serves the frontend directly
 const API_BASE = '/api/reviews';
 
 // ── Theme Icons (used for display in frontend) ──
 const THEME_ICONS = {
-  food: '🍽️',
-  host: '👤',
-  location: '📍',
+  food:        '🍽️',
+  host:        '👤',
+  location:    '📍',
   cleanliness: '✨',
-  value: '💰',
-  experience: '⭐',
+  value:       '💰',
+  experience:  '⭐',
 };
+
+// ──────────────────────────────────────────────
+//  Internal helper — shared fetch logic
+// ──────────────────────────────────────────────
+
+/**
+ * Fetch wrapper that throws a descriptive Error on non-OK responses.
+ *
+ * @param {string} url
+ * @param {RequestInit} [options]
+ * @returns {Promise<{ data, meta }>}
+ */
+async function apiFetch(url, options = {}) {
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch (networkErr) {
+    // Server is down or unreachable
+    throw new Error('Cannot reach the server. Make sure the backend is running on port 5000.');
+  }
+
+  // 204 No Content — no body to parse
+  if (response.status === 204) return { data: null };
+
+  let result;
+  try {
+    result = await response.json();
+  } catch {
+    // Server returned non-JSON (e.g. HTML error page)
+    throw new Error(`Server error (${response.status}). The backend may be down or restarting.`);
+  }
+
+  if (!response.ok) {
+    const msg = result.error || `Request failed with status ${response.status}`;
+    const err = new Error(msg);
+    err.status  = response.status;
+    err.details = result.details || null;
+    throw err;
+  }
+
+  return result;
+}
+
 
 // ──────────────────────────────────────────────
 //  API Functions — Backend Integration
@@ -29,118 +70,111 @@ const THEME_ICONS = {
 
 /**
  * Analyze multiple reviews via the backend API.
- * Sends reviews to POST /api/reviews/analyze and returns
- * the analysis results from the server.
+ * Sends reviews to POST /api/reviews/analyze.
  *
  * @param {string[]} reviews - Array of review strings
  * @returns {Promise<Object[]>} Array of analysis result objects
  * @throws {Error} If the API request fails
  */
 export async function analyzeReviews(reviews) {
-  const response = await fetch(`${API_BASE}/analyze`, {
-    method: 'POST',
+  const result = await apiFetch(`${API_BASE}/analyze`, {
+    method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ reviews }),
+    body:    JSON.stringify({ reviews }),
   });
-
-  const result = await response.json();
-
-  if (!response.ok) {
-    throw new Error(result.error || 'Failed to analyze reviews');
-  }
-
   return result.data;
 }
 
 /**
- * Get all review history from the backend.
- * Replaces the old localStorage-based getHistory().
+ * Get all review history from the backend (paginated).
  *
- * @returns {Promise<Object[]>} Array of all stored reviews (newest first)
+ * @param {Object} [params]
+ * @param {number} [params.page=1]
+ * @param {number} [params.limit=20]
+ * @param {string} [params.sort='-analyzedAt']
+ * @returns {Promise<{ data: Object[], count, page, totalPages, hasNextPage, hasPrevPage }>}
  */
-export async function getHistory() {
-  const response = await fetch(API_BASE);
-  const result = await response.json();
-
-  if (!response.ok) {
-    throw new Error(result.error || 'Failed to fetch history');
-  }
-
-  return result.data;
+export async function getHistory({ page = 1, limit = 20, sort = '-analyzedAt' } = {}) {
+  const params = new URLSearchParams({ page, limit, sort });
+  const result = await apiFetch(`${API_BASE}?${params}`);
+  return result; // returns full result (data + pagination meta)
 }
 
 /**
  * Clear all review history via the backend.
- * Replaces the old localStorage.removeItem call.
  *
- * @returns {Promise<void>}
+ * @returns {Promise<{ deleted: number, message: string }>}
  */
 export async function clearHistory() {
-  const response = await fetch(API_BASE, {
-    method: 'DELETE',
-  });
-
-  if (!response.ok) {
-    const result = await response.json();
-    throw new Error(result.error || 'Failed to clear history');
-  }
+  const result = await apiFetch(API_BASE, { method: 'DELETE' });
+  return result;
 }
 
 /**
- * Get dashboard aggregate data from the backend.
- * Replaces the old client-side getDashboardData().
+ * Get dashboard aggregate statistics from the backend.
  *
- * @returns {Promise<Object>} { total, sentimentCounts, themeCounts }
+ * @returns {Promise<{ total, sentimentCounts, themeCounts }>}
  */
 export async function getDashboardData() {
-  const response = await fetch(`${API_BASE}/stats`);
-  const result = await response.json();
-
-  if (!response.ok) {
-    throw new Error(result.error || 'Failed to fetch dashboard data');
-  }
-
+  const result = await apiFetch(`${API_BASE}/stats`);
   return result.data;
 }
 
 /**
  * Search and filter reviews via the backend.
- * Replaces client-side filtering in History page.
+ * Uses the /search endpoint (full-text + filter).
  *
- * @param {Object} filters - { q, sentiment, theme }
- * @returns {Promise<Object[]>} Filtered array of reviews
+ * @param {Object} [filters]
+ * @param {string} [filters.q]         - Keyword search
+ * @param {string} [filters.sentiment] - 'all'|'positive'|'neutral'|'negative'
+ * @param {string} [filters.theme]     - 'all'|'food'|'host'|...
+ * @param {number} [filters.page=1]
+ * @param {number} [filters.limit=20]
+ * @returns {Promise<{ data: Object[], count, page, totalPages, hasNextPage, hasPrevPage }>}
  */
-export async function searchReviews({ q, sentiment, theme } = {}) {
+export async function searchReviews({ q, sentiment, theme, page = 1, limit = 20 } = {}) {
   const params = new URLSearchParams();
-  if (q) params.set('q', q);
+  if (q)                           params.set('q',         q);
   if (sentiment && sentiment !== 'all') params.set('sentiment', sentiment);
-  if (theme && theme !== 'all') params.set('theme', theme);
+  if (theme     && theme     !== 'all') params.set('theme',     theme);
+  params.set('page',  page);
+  params.set('limit', limit);
 
-  const response = await fetch(`${API_BASE}/search?${params.toString()}`);
-  const result = await response.json();
-
-  if (!response.ok) {
-    throw new Error(result.error || 'Failed to search reviews');
-  }
-
-  return result.data;
+  const result = await apiFetch(`${API_BASE}/search?${params}`);
+  return result;
 }
 
 /**
- * Delete a single review by ID.
+ * Filter reviews by sentiment and/or theme (structured filter endpoint).
  *
- * @param {string} id - The review UUID
+ * @param {Object} [filters]
+ * @param {string} [filters.sentiment]
+ * @param {string} [filters.theme]
+ * @param {number} [filters.page=1]
+ * @param {number} [filters.limit=20]
+ * @param {string} [filters.sort='-analyzedAt']
+ * @returns {Promise<{ data: Object[], count, page, totalPages, hasNextPage, hasPrevPage }>}
+ */
+export async function filterReviews({ sentiment, theme, page = 1, limit = 20, sort = '-analyzedAt' } = {}) {
+  const params = new URLSearchParams();
+  if (sentiment && sentiment !== 'all') params.set('sentiment', sentiment);
+  if (theme     && theme     !== 'all') params.set('theme',     theme);
+  params.set('page',  page);
+  params.set('limit', limit);
+  params.set('sort',  sort);
+
+  const result = await apiFetch(`${API_BASE}/filter?${params}`);
+  return result;
+}
+
+/**
+ * Delete a single review by its MongoDB ObjectId.
+ *
+ * @param {string} id - The MongoDB ObjectId string
  * @returns {Promise<void>}
  */
 export async function deleteReview(id) {
-  const response = await fetch(`${API_BASE}/${id}`, {
-    method: 'DELETE',
-  });
-
-  if (!response.ok && response.status !== 204) {
-    const result = await response.json();
-    throw new Error(result.error || 'Failed to delete review');
-  }
+  await apiFetch(`${API_BASE}/${id}`, { method: 'DELETE' });
 }
 
 // ──────────────────────────────────────────────
@@ -148,16 +182,16 @@ export async function deleteReview(id) {
 // ──────────────────────────────────────────────
 
 /**
- * Export results to CSV string.
+ * Export results to a CSV string.
  */
 export function exportToCSV(results) {
   const headers = ['#', 'Review', 'Sentiment', 'Theme', 'Suggested Response', 'Analyzed At'];
-  const rows = results.map((r, i) => [
+  const rows    = results.map((r, i) => [
     i + 1,
-    `"${r.reviewText.replace(/"/g, '""')}"`,
+    `"${(r.reviewText || '').replace(/"/g, '""')}"`,
     r.sentiment,
     r.theme,
-    `"${r.response.replace(/"/g, '""')}"`,
+    `"${(r.response || '').replace(/"/g, '""')}"`,
     r.analyzedAt || '',
   ]);
 
@@ -166,13 +200,13 @@ export function exportToCSV(results) {
 }
 
 /**
- * Download a string as a file.
+ * Trigger a file download in the browser.
  */
 export function downloadFile(content, filename, mimeType = 'text/csv') {
   const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
+  const url  = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.href = url;
+  link.href     = url;
   link.download = filename;
   document.body.appendChild(link);
   link.click();

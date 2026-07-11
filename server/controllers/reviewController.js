@@ -49,20 +49,26 @@ const analyzeReviews = asyncWrapper(async (req, res) => {
   }
 
   // Analyze each review and build document objects
-  const documents = reviews
+  // analyzeReview is async (may call Gemini API), so we await each one
+  const cleanedReviews = reviews
     .map((text) => text.trim())
-    .filter((text) => text.length > 0)
-    .map((text) => {
-      const analysis = analyzeReview(text);
-      return {
-        reviewText: text,
-        sentiment:  analysis.sentiment,
-        theme:      analysis.theme,
-        themeIcon:  THEME_ICONS[analysis.theme] || '🏷️',
-        response:   analysis.response,
-        analyzedAt: new Date(),
-      };
-    });
+    .filter((text) => text.length > 0);
+
+  // Run all AI analysis API calls in parallel for blazing-fast speed!
+  const analysisPromises = cleanedReviews.map((text) => analyzeReview(text));
+  const analyses = await Promise.all(analysisPromises);
+
+  const documents = cleanedReviews.map((text, index) => {
+    const analysis = analyses[index];
+    return {
+      reviewText: text,
+      sentiment:  analysis.sentiment,
+      theme:      analysis.theme,
+      themeIcon:  THEME_ICONS[analysis.theme] || '🏷️',
+      response:   analysis.response,
+      analyzedAt: new Date(),
+    };
+  });
 
   // Bulk insert into MongoDB
   const savedReviews = await Review.insertMany(documents, { ordered: false });

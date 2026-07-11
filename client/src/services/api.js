@@ -1,18 +1,16 @@
 /**
- * Rev.AI — API Service Layer
+ * Rev.AI — API Service Layer (Week 6 — Auth + AI upgrade)
  *
- * Connects the React frontend to the Express.js backend (MongoDB-powered).
- * All review analysis, history, and dashboard data comes from the server.
- *
- * Client-only utilities (CSV export, file download) remain here.
+ * All API calls are centralized here.
+ * JWT is stored in localStorage and auto-included in protected requests.
  */
 
-// ── Base URL ─────────────────────────────────
-// In development, Vite proxies /api to http://localhost:5000
-const API_BASE = '/api/reviews';
+const API_BASE  = '/api/reviews';
+const AUTH_BASE = '/api/auth';
+const AI_BASE   = '/api/ai';
 
-// ── Theme Icons (used for display in frontend) ──
-const THEME_ICONS = {
+// ── Theme Icons ───────────────────────────────────────────
+export const THEME_ICONS = {
   food:        '🍽️',
   host:        '👤',
   location:    '📍',
@@ -22,39 +20,82 @@ const THEME_ICONS = {
 };
 
 // ──────────────────────────────────────────────
-//  Internal helper — shared fetch logic
+//  JWT Helpers
 // ──────────────────────────────────────────────
 
+export const setToken    = (token) => localStorage.setItem('revai_token', token);
+export const getToken    = ()      => localStorage.getItem('revai_token');
+export const removeToken = ()      => {
+  localStorage.removeItem('revai_token');
+  localStorage.removeItem('revai_user');
+};
+
+export const setUser = (user) => localStorage.setItem('revai_user', JSON.stringify(user));
+export const getUser = () => {
+  try {
+    const u = localStorage.getItem('revai_user');
+    return u ? JSON.parse(u) : null;
+  } catch { return null; }
+};
+
 /**
- * Fetch wrapper that throws a descriptive Error on non-OK responses.
- *
- * @param {string} url
- * @param {RequestInit} [options]
- * @returns {Promise<{ data, meta }>}
+ * Check if the user has a valid, non-expired JWT.
+ * @returns {boolean}
  */
-async function apiFetch(url, options = {}) {
+export const isAuthenticated = () => {
+  const token = getToken();
+  if (!token) return false;
+  try {
+    const payload   = JSON.parse(atob(token.split('.')[1]));
+    const isExpired = payload.exp * 1000 < Date.now();
+    if (isExpired) { removeToken(); return false; }
+    return true;
+  } catch {
+    removeToken();
+    return false;
+  }
+};
+
+// ──────────────────────────────────────────────
+//  Internal fetch helpers
+// ──────────────────────────────────────────────
+
+const buildHeaders = (includeAuth = true) => {
+  const headers = { 'Content-Type': 'application/json' };
+  if (includeAuth) {
+    const token = getToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+};
+
+async function apiFetch(url, options = {}, includeAuth = true) {
   let response;
   try {
-    response = await fetch(url, options);
-  } catch (networkErr) {
-    // Server is down or unreachable
+    response = await fetch(url, {
+      ...options,
+      headers: { ...buildHeaders(includeAuth), ...(options.headers || {}) },
+    });
+  } catch {
     throw new Error('Cannot reach the server. Make sure the backend is running on port 5000.');
   }
 
-  // 204 No Content — no body to parse
   if (response.status === 204) return { data: null };
 
   let result;
   try {
     result = await response.json();
   } catch {
-    // Server returned non-JSON (e.g. HTML error page)
     throw new Error(`Server error (${response.status}). The backend may be down or restarting.`);
   }
 
+  if (response.status === 401) {
+    removeToken();
+    throw new Error(result.error || 'Session expired. Please log in again.');
+  }
+
   if (!response.ok) {
-    const msg = result.error || `Request failed with status ${response.status}`;
-    const err = new Error(msg);
+    const err = new Error(result.error || `Request failed with status ${response.status}`);
     err.status  = response.status;
     err.details = result.details || null;
     throw err;
@@ -63,147 +104,125 @@ async function apiFetch(url, options = {}) {
   return result;
 }
 
+// ──────────────────────────────────────────────
+//  Auth API
+// ──────────────────────────────────────────────
+
+export async function register({ name, email, password }) {
+  const result = await apiFetch(`${AUTH_BASE}/register`, {
+    method: 'POST',
+    body:   JSON.stringify({ name, email, password }),
+  }, false);
+  setToken(result.token);
+  setUser(result.user);
+  return result;
+}
+
+export async function login({ email, password }) {
+  const result = await apiFetch(`${AUTH_BASE}/login`, {
+    method: 'POST',
+    body:   JSON.stringify({ email, password }),
+  }, false);
+  setToken(result.token);
+  setUser(result.user);
+  return result;
+}
+
+export function logout() {
+  removeToken();
+  window.location.href = '/';
+}
+
+export async function getMe() {
+  return apiFetch(`${AUTH_BASE}/me`);
+}
+
+export function loginWithGoogle() {
+  window.location.href = '/api/auth/google';
+}
 
 // ──────────────────────────────────────────────
-//  API Functions — Backend Integration
+//  Review API
 // ──────────────────────────────────────────────
 
-/**
- * Analyze multiple reviews via the backend API.
- * Sends reviews to POST /api/reviews/analyze.
- *
- * @param {string[]} reviews - Array of review strings
- * @returns {Promise<Object[]>} Array of analysis result objects
- * @throws {Error} If the API request fails
- */
 export async function analyzeReviews(reviews) {
   const result = await apiFetch(`${API_BASE}/analyze`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ reviews }),
+    method: 'POST',
+    body:   JSON.stringify({ reviews }),
   });
   return result.data;
 }
 
-/**
- * Get all review history from the backend (paginated).
- *
- * @param {Object} [params]
- * @param {number} [params.page=1]
- * @param {number} [params.limit=20]
- * @param {string} [params.sort='-analyzedAt']
- * @returns {Promise<{ data: Object[], count, page, totalPages, hasNextPage, hasPrevPage }>}
- */
-export async function getHistory({ page = 1, limit = 20, sort = '-analyzedAt' } = {}) {
+export async function getHistory({ page = 1, limit = 100, sort = '-analyzedAt' } = {}) {
   const params = new URLSearchParams({ page, limit, sort });
-  const result = await apiFetch(`${API_BASE}?${params}`);
-  return result; // returns full result (data + pagination meta)
+  return apiFetch(`${API_BASE}?${params}`);
 }
 
-/**
- * Clear all review history via the backend.
- *
- * @returns {Promise<{ deleted: number, message: string }>}
- */
-export async function clearHistory() {
-  const result = await apiFetch(API_BASE, { method: 'DELETE' });
-  return result;
+export async function getStats() {
+  return apiFetch(`${API_BASE}/stats`);
 }
 
-/**
- * Get dashboard aggregate statistics from the backend.
- *
- * @returns {Promise<{ total, sentimentCounts, themeCounts }>}
- */
-export async function getDashboardData() {
-  const result = await apiFetch(`${API_BASE}/stats`);
-  return result.data;
-}
+// Alias used by Dashboard.jsx
+export const getDashboardData = getStats;
 
-/**
- * Search and filter reviews via the backend.
- * Uses the /search endpoint (full-text + filter).
- *
- * @param {Object} [filters]
- * @param {string} [filters.q]         - Keyword search
- * @param {string} [filters.sentiment] - 'all'|'positive'|'neutral'|'negative'
- * @param {string} [filters.theme]     - 'all'|'food'|'host'|...
- * @param {number} [filters.page=1]
- * @param {number} [filters.limit=20]
- * @returns {Promise<{ data: Object[], count, page, totalPages, hasNextPage, hasPrevPage }>}
- */
 export async function searchReviews({ q, sentiment, theme, page = 1, limit = 20 } = {}) {
   const params = new URLSearchParams();
-  if (q)                           params.set('q',         q);
+  if (q)                           params.set('q', q);
   if (sentiment && sentiment !== 'all') params.set('sentiment', sentiment);
-  if (theme     && theme     !== 'all') params.set('theme',     theme);
+  if (theme     && theme     !== 'all') params.set('theme', theme);
   params.set('page',  page);
   params.set('limit', limit);
-
-  const result = await apiFetch(`${API_BASE}/search?${params}`);
-  return result;
+  return apiFetch(`${API_BASE}/search?${params}`);
 }
 
-/**
- * Filter reviews by sentiment and/or theme (structured filter endpoint).
- *
- * @param {Object} [filters]
- * @param {string} [filters.sentiment]
- * @param {string} [filters.theme]
- * @param {number} [filters.page=1]
- * @param {number} [filters.limit=20]
- * @param {string} [filters.sort='-analyzedAt']
- * @returns {Promise<{ data: Object[], count, page, totalPages, hasNextPage, hasPrevPage }>}
- */
-export async function filterReviews({ sentiment, theme, page = 1, limit = 20, sort = '-analyzedAt' } = {}) {
-  const params = new URLSearchParams();
-  if (sentiment && sentiment !== 'all') params.set('sentiment', sentiment);
-  if (theme     && theme     !== 'all') params.set('theme',     theme);
-  params.set('page',  page);
-  params.set('limit', limit);
-  params.set('sort',  sort);
-
-  const result = await apiFetch(`${API_BASE}/filter?${params}`);
-  return result;
-}
-
-/**
- * Delete a single review by its MongoDB ObjectId.
- *
- * @param {string} id - The MongoDB ObjectId string
- * @returns {Promise<void>}
- */
-export async function deleteReview(id) {
-  await apiFetch(`${API_BASE}/${id}`, { method: 'DELETE' });
+export async function clearHistory() {
+  return apiFetch(API_BASE, { method: 'DELETE' });
 }
 
 // ──────────────────────────────────────────────
-//  Client-Only Utilities (no backend needed)
+//  AI API (protected — JWT required)
 // ──────────────────────────────────────────────
 
-/**
- * Export results to a CSV string.
- */
-export function exportToCSV(results) {
-  const headers = ['#', 'Review', 'Sentiment', 'Theme', 'Suggested Response', 'Analyzed At'];
-  const rows    = results.map((r, i) => [
-    i + 1,
-    `"${(r.reviewText || '').replace(/"/g, '""')}"`,
-    r.sentiment,
-    r.theme,
-    `"${(r.response || '').replace(/"/g, '""')}"`,
-    r.analyzedAt || '',
+export async function aiChat(message) {
+  return apiFetch(`${AI_BASE}/chat`, {
+    method: 'POST',
+    body:   JSON.stringify({ message }),
+  });
+}
+
+export async function aiSummarize(text) {
+  return apiFetch(`${AI_BASE}/summarize`, {
+    method: 'POST',
+    body:   JSON.stringify({ text }),
+  });
+}
+
+export async function aiRecommend(reviewText) {
+  return apiFetch(`${AI_BASE}/recommend`, {
+    method: 'POST',
+    body:   JSON.stringify({ reviewText }),
+  });
+}
+
+// ──────────────────────────────────────────────
+//  CSV Utilities (client-side only)
+// ──────────────────────────────────────────────
+
+export function exportToCSV(data) {
+  const headers = ['#', 'Review', 'Sentiment', 'Theme', 'Response', 'Date'];
+  const rows = data.map((item, idx) => [
+    idx + 1,
+    `"${(item.reviewText || '').replace(/"/g, '""')}"`,
+    item.sentiment,
+    item.theme,
+    `"${(item.response || '').replace(/"/g, '""')}"`,
+    item.analyzedAt ? new Date(item.analyzedAt).toLocaleString() : '',
   ]);
-
-  const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-  return csv;
+  return [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
 }
 
-/**
- * Trigger a file download in the browser.
- */
-export function downloadFile(content, filename, mimeType = 'text/csv') {
-  const blob = new Blob([content], { type: mimeType });
+export function downloadFile(content, filename) {
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
   const url  = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href     = url;
@@ -213,5 +232,3 @@ export function downloadFile(content, filename, mimeType = 'text/csv') {
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
-
-export { THEME_ICONS };

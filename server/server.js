@@ -1,13 +1,14 @@
 /**
- * Rev.AI — Express Server Entry Point
+ * Rev.AI — Express Server Entry Point (Week 6 — Auth + AI upgrade)
  *
  * Startup sequence:
  *  1. Load environment variables from .env
- *  2. Connect to MongoDB Atlas (exits on failure)
- *  3. Configure Express middleware (helmet, cors, morgan, compression)
- *  4. Mount API routes
- *  5. Attach 404 and global error handlers
- *  6. Start HTTP server
+ *  2. Initialize Passport (Google OAuth)
+ *  3. Connect to MongoDB Atlas
+ *  4. Configure middleware (helmet, cors, morgan, compression, rate-limit)
+ *  5. Mount API routes
+ *  6. Attach 404 and global error handlers
+ *  7. Start HTTP server
  */
 
 const express      = require('express');
@@ -16,61 +17,83 @@ const dotenv       = require('dotenv');
 const helmet       = require('helmet');
 const morgan       = require('morgan');
 const compression  = require('compression');
+const cookieParser = require('cookie-parser');
+const rateLimit    = require('express-rate-limit');
+const mongoose     = require('mongoose');
 
 // ── Load .env before anything else ──────────────────────
 dotenv.config();
 
-const { connectDB, disconnectDB } = require('./config/db');
-const reviewRoutes                = require('./routes/reviewRoutes');
-const { handle404, globalErrorHandler } = require('./middleware/errorHandler');
+// ── Initialize Passport (must be after dotenv.config) ───
+require('./config/passport');
+const passport = require('passport');
+
+const { connectDB, disconnectDB }              = require('./config/db');
+const reviewRoutes                             = require('./routes/reviewRoutes');
+const authRoutes                               = require('./routes/authRoutes');
+const aiRoutes                                 = require('./routes/aiRoutes');
+const { handle404, globalErrorHandler }        = require('./middleware/errorHandler');
 
 // ── Create Express App ──────────────────────────────────
 const app  = express();
 const PORT = process.env.PORT || 5000;
 
-// ── Security & Performance Middleware ───────────────────
+// ── Security Middleware ──────────────────────────────────
 
 // Helmet — sets secure HTTP response headers
 app.use(helmet());
 
 // CORS — allow requests from the Vite dev server and production origin
 const allowedOrigins = [
-  'http://localhost:5173', // Vite dev server
-  'http://localhost:4173', // Vite preview
-  process.env.CLIENT_ORIGIN, // optional production URL from env
+  'http://localhost:5173',
+  'http://localhost:4173',
+  process.env.CLIENT_ORIGIN,
 ].filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g., curl, Postman, server-to-server)
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
       callback(new Error(`CORS: Origin "${origin}" is not allowed.`));
     },
-    methods:      ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods:        ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials:  true,
+    credentials:    true,
   })
 );
 
-// Compression — gzip responses to reduce payload size
+// Global rate limiter — 200 requests per 15 minutes (per IP)
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max:      200,
+  message: {
+    success: false,
+    error:   'Too many requests. Please slow down.',
+  },
+  standardHeaders: true,
+  legacyHeaders:   false,
+});
+app.use('/api/', globalLimiter);
+
+// Compression — gzip responses
 app.use(compression());
 
 // Body parsing
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
+
+// Passport — initialize (no session, using JWT)
+app.use(passport.initialize());
 
 // Morgan — HTTP request logger
-// Use 'dev' format in development, 'combined' in production
 const morganFormat = process.env.NODE_ENV === 'production' ? 'combined' : 'dev';
 app.use(morgan(morganFormat));
 
-// ── Health Check ────────────────────────────────────────
+// ── Health Check ─────────────────────────────────────────
 app.get('/api/health', (req, res) => {
-  const mongoose = require('mongoose');
-  const dbState  = ['disconnected', 'connected', 'connecting', 'disconnecting'];
-
+  const dbState = ['disconnected', 'connected', 'connecting', 'disconnecting'];
   res.status(200).json({
     success:   true,
     message:   'Rev.AI server is running',
@@ -78,28 +101,36 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     uptime:    `${Math.floor(process.uptime())}s`,
     env:       process.env.NODE_ENV || 'development',
+    features: {
+      auth:   true,
+      google: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+      gemini: !!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here'),
+    },
   });
 });
 
-// ── API Routes ───────────────────────────────────────────
+// ── API Routes ────────────────────────────────────────────
+app.use('/api/auth',    authRoutes);
+app.use('/api/ai',      aiRoutes);
 app.use('/api/reviews', reviewRoutes);
 
-// ── 404 & Global Error Handlers ─────────────────────────
-// Must be mounted AFTER all routes
+// ── 404 & Global Error Handlers ──────────────────────────
 app.use(handle404);
 app.use(globalErrorHandler);
 
-// ── Start Server (after DB connects) ────────────────────
+// ── Start Server (after DB connects) ─────────────────────
 const startServer = async () => {
   await connectDB();
 
   const server = app.listen(PORT, () => {
     console.log(`\n🚀  Rev.AI server running on  http://localhost:${PORT}`);
-    console.log(`📡  API base:                 http://localhost:${PORT}/api/reviews`);
+    console.log(`📡  Reviews API:              http://localhost:${PORT}/api/reviews`);
+    console.log(`🔐  Auth API:                 http://localhost:${PORT}/api/auth`);
+    console.log(`🤖  AI API:                   http://localhost:${PORT}/api/ai`);
     console.log(`💚  Health check:             http://localhost:${PORT}/api/health\n`);
   });
 
-  // ── Graceful Shutdown ──────────────────────────────────
+  // Graceful Shutdown
   const shutdown = async (signal) => {
     console.log(`\n${signal} received — shutting down gracefully...`);
     server.close(async () => {
@@ -112,7 +143,6 @@ const startServer = async () => {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT',  () => shutdown('SIGINT'));
 
-  // Handle unhandled promise rejections
   process.on('unhandledRejection', (err) => {
     console.error('❌  Unhandled Rejection:', err.message);
     shutdown('unhandledRejection');

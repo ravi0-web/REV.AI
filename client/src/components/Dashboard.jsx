@@ -33,7 +33,7 @@ export default function Dashboard() {
       try {
         setIsLoading(true);
         const stats = await getDashboardData();
-        setData(stats);
+        setData(stats.data || stats);
       } catch (err) {
         console.error('Failed to load dashboard data:', err);
         // Fallback to empty data

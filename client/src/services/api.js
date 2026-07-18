@@ -5,9 +5,10 @@
  * JWT is stored in localStorage and auto-included in protected requests.
  */
 
-const API_BASE  = '/api/reviews';
-const AUTH_BASE = '/api/auth';
-const AI_BASE   = '/api/ai';
+const BASE_URL  = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_BASE  = `${BASE_URL}/api/reviews`;
+const AUTH_BASE = `${BASE_URL}/api/auth`;
+const AI_BASE   = `${BASE_URL}/api/ai`;
 
 // ── Theme Icons ───────────────────────────────────────────
 export const THEME_ICONS = {

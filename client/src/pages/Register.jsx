@@ -19,6 +19,7 @@ export default function Register() {
 
     try {
       await register({ name, email, password });
+      alert('Signup successfully');
       navigate('/');
     } catch (err) {
       setError(err.message || 'Failed to create account');

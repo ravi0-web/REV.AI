@@ -40,6 +40,7 @@ export function AuthProvider({ children }) {
   const logout = () => {
     api.logout();
     setUser(null);
+    alert('Logout successfully');
     navigate('/login');
   };
 

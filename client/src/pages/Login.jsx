@@ -18,7 +18,6 @@ export default function Login() {
 
     try {
       await login({ email, password });
-      alert('Login successfully');
       navigate('/');
     } catch (err) {
       setError(err.message || 'Failed to login');

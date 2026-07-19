@@ -43,7 +43,7 @@ const PORT = process.env.PORT || 5000;
 // Helmet — sets secure HTTP response headers
 app.use(helmet());
 
-// CORS — allow requests from the Vite dev server and production origin
+// CORS — allow requests from Vite dev server, Vercel, and production origin
 const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:4173',
@@ -55,6 +55,8 @@ app.use(
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
+      // Allow all Vercel preview/production deployments
+      if (origin.endsWith('.vercel.app')) return callback(null, true);
       callback(new Error(`CORS: Origin "${origin}" is not allowed.`));
     },
     methods:        ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],

@@ -78,7 +78,7 @@ async function apiFetch(url, options = {}, includeAuth = true) {
       headers: { ...buildHeaders(includeAuth), ...(options.headers || {}) },
     });
   } catch {
-    throw new Error('Cannot reach the server. Make sure the backend is running on port 5000.');
+    throw new Error('Cannot reach the server. Please check your internet connection and try again.');
   }
 
   if (response.status === 204) return { data: null };

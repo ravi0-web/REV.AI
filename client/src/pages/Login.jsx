@@ -20,7 +20,11 @@ export default function Login() {
       await login({ email, password });
       navigate('/');
     } catch (err) {
-      setError(err.message || 'Failed to login');
+      if (err.details && Array.isArray(err.details) && err.details.length > 0) {
+        setError(err.details.join(' • '));
+      } else {
+        setError(err.message || 'Failed to login');
+      }
     } finally {
       setIsSubmitting(false);
     }

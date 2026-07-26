@@ -21,7 +21,11 @@ export default function Register() {
       await register({ name, email, password });
       navigate('/');
     } catch (err) {
-      setError(err.message || 'Failed to create account');
+      if (err.details && Array.isArray(err.details) && err.details.length > 0) {
+        setError(err.details.join(' • '));
+      } else {
+        setError(err.message || 'Failed to create account');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -92,6 +96,9 @@ export default function Register() {
                 minLength="6"
               />
             </div>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
+              Must be at least 6 characters with at least 1 number.
+            </span>
           </div>
 
           <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: 'var(--space-sm)', justifyContent: 'center' }} disabled={isSubmitting}>

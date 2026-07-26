@@ -22,6 +22,7 @@ const {
   getReviewById,
   deleteReview,
   clearAllReviews,
+  updateReview,
 } = require('../controllers/reviewController');
 
 // ── Static routes first ───────────────────────────────────
@@ -54,6 +55,9 @@ router.delete('/', clearAllReviews);
 
 // GET    /api/reviews/:id       → Get single review by MongoDB ObjectId
 router.get('/:id', validateObjectId, getReviewById);
+
+// PUT    /api/reviews/:id       → Update single review by MongoDB ObjectId
+router.put('/:id', validateObjectId, updateReview);
 
 // DELETE /api/reviews/:id       → Delete single review by MongoDB ObjectId
 router.delete('/:id', validateObjectId, deleteReview);

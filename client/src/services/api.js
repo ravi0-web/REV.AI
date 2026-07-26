@@ -180,6 +180,18 @@ export async function clearHistory() {
   return apiFetch(API_BASE, { method: 'DELETE' });
 }
 
+export async function updateReview(id, reviewText) {
+  const result = await apiFetch(`${API_BASE}/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ reviewText }),
+  });
+  return result.data;
+}
+
+export async function deleteReview(id) {
+  return apiFetch(`${API_BASE}/${id}`, { method: 'DELETE' });
+}
+
 // ──────────────────────────────────────────────
 //  AI API (protected — JWT required)
 // ──────────────────────────────────────────────

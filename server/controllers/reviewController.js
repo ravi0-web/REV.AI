@@ -256,6 +256,26 @@ const clearAllReviews = asyncWrapper(async (req, res) => {
   });
 });
 
+const updateReview = asyncWrapper(async (req, res) => {
+  const { reviewText } = req.body;
+  if (!reviewText || typeof reviewText !== 'string' || reviewText.trim().length < 5) {
+    return sendError(res, 'Review text must be at least 5 characters.', 400);
+  }
+  const existing = await Review.findById(req.params.id);
+  if (!existing) {
+    return sendError(res, `Review with ID ${req.params.id} not found.`, 404);
+  }
+  const analysis = await analyzeReview(reviewText.trim());
+  existing.reviewText = reviewText.trim();
+  existing.sentiment  = analysis.sentiment;
+  existing.theme      = analysis.theme;
+  existing.themeIcon   = THEME_ICONS[analysis.theme] || '⭐';
+  existing.response   = analysis.response;
+  existing.analyzedAt = new Date();
+  await existing.save();
+  return sendSuccess(res, existing, 200);
+});
+
 module.exports = {
   analyzeReviews,
   getAllReviews,
@@ -265,4 +285,5 @@ module.exports = {
   getReviewById,
   deleteReview,
   clearAllReviews,
+  updateReview,
 };

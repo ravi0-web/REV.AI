@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Search, Trash2, Download, Filter, Loader } from 'lucide-react';
-import { getHistory, clearHistory, searchReviews, exportToCSV, downloadFile, THEME_ICONS } from '../services/api';
+import { Search, Trash2, Download, Filter, Loader, Pencil } from 'lucide-react';
+import { getHistory, clearHistory, searchReviews, exportToCSV, downloadFile, THEME_ICONS, updateReview, deleteReview } from '../services/api';
 
 function SentimentBadge({ sentiment }) {
   return (
@@ -28,30 +28,64 @@ export default function History() {
   const [sentimentFilter, setSentimentFilter] = useState('all');
   const [isLoading, setIsLoading] = useState(true);
   const [toast, setToast] = useState(null);
+  
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState('');
+  const [deletingId, setDeletingId] = useState(null);
 
   const showToast = (msg, type = 'success') => {
     setToast({ message: msg, type });
     setTimeout(() => setToast(null), 3500);
   };
 
+  const loadHistory = async () => {
+    try {
+      setIsLoading(true);
+      const result = await getHistory({ page: 1, limit: 100 });
+      const data = result.data || [];
+      setHistory(data);
+      setFilteredHistory(data);
+    } catch (err) {
+      console.error('Failed to load history:', err);
+      showToast('❌ Failed to load review history', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Load all history from backend on mount
   useEffect(() => {
-    const loadHistory = async () => {
-      try {
-        setIsLoading(true);
-        const result = await getHistory({ page: 1, limit: 100 });
-        const data = result.data || [];
-        setHistory(data);
-        setFilteredHistory(data);
-      } catch (err) {
-        console.error('Failed to load history:', err);
-        showToast('❌ Failed to load review history', 'error');
-      } finally {
-        setIsLoading(false);
-      }
-    };
     loadHistory();
   }, []);
+
+  const handleEditSave = async (id) => {
+    if (!editText || editText.trim().length < 5) {
+      showToast('Review must be at least 5 characters', 'error');
+      return;
+    }
+    try {
+      await updateReview(id, editText);
+      await loadHistory();
+      showToast('Review updated', 'success');
+      setEditingId(null);
+      setEditText('');
+    } catch (err) {
+      showToast('❌ Failed to update review', 'error');
+      console.error(err);
+    }
+  };
+
+  const handleDeleteConfirm = async (id) => {
+    try {
+      await deleteReview(id);
+      await loadHistory();
+      showToast('Review deleted', 'success');
+      setDeletingId(null);
+    } catch (err) {
+      showToast('❌ Failed to delete review', 'error');
+      console.error(err);
+    }
+  };
 
   // Search & filter via backend whenever query or filter changes
   const applyFilters = useCallback(async () => {
@@ -224,23 +258,65 @@ export default function History() {
                     <th style={{ width: '130px' }}>Theme</th>
                     <th>Response</th>
                     <th style={{ width: '120px' }}>Date</th>
+                    <th style={{ width: '100px' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredHistory.map((item, idx) => (
-                    <tr key={item._id || item.id || idx}>
-                      <td className="cell-number">{idx + 1}</td>
-                      <td className="review-text-cell">
-                        <div className="truncated">{item.reviewText}</div>
-                      </td>
-                      <td><SentimentBadge sentiment={item.sentiment} /></td>
-                      <td><ThemeTag theme={item.theme} /></td>
-                      <td className="response-cell">{item.response}</td>
-                      <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                        {formatDate(item.analyzedAt)}
-                      </td>
-                    </tr>
-                  ))}
+                  {filteredHistory.map((item, idx) => {
+                    const itemId = item._id || item.id || idx;
+                    const isEditing = editingId === itemId;
+                    const isDeleting = deletingId === itemId;
+                    
+                    return (
+                      <tr key={itemId}>
+                        <td className="cell-number">{idx + 1}</td>
+                        <td className="review-text-cell">
+                          {isEditing ? (
+                            <div>
+                              <textarea
+                                className="review-textarea"
+                                style={{ width: '100%', minHeight: '60px' }}
+                                value={editText}
+                                onChange={(e) => setEditText(e.target.value)}
+                              />
+                              <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
+                                <button className="btn btn-sm btn-primary" onClick={() => handleEditSave(itemId)}>Save</button>
+                                <button className="btn btn-sm btn-ghost" onClick={() => { setEditingId(null); setEditText(''); }}>Cancel</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="truncated">{item.reviewText}</div>
+                          )}
+                        </td>
+                        <td><SentimentBadge sentiment={item.sentiment} /></td>
+                        <td><ThemeTag theme={item.theme} /></td>
+                        <td className="response-cell">{item.response}</td>
+                        <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                          {formatDate(item.analyzedAt)}
+                        </td>
+                        <td>
+                          {isDeleting ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              <span style={{ fontSize: '0.75rem', color: 'var(--color-danger)' }}>Sure?</span>
+                              <div style={{ display: 'flex', gap: '4px' }}>
+                                <button className="btn btn-sm btn-danger" onClick={() => handleDeleteConfirm(itemId)}>Yes</button>
+                                <button className="btn btn-sm btn-ghost" onClick={() => setDeletingId(null)}>No</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button className="btn btn-ghost btn-sm" onClick={() => { setEditingId(itemId); setEditText(item.reviewText); setDeletingId(null); }} disabled={isEditing || isDeleting} title="Edit">
+                                <Pencil size={14} />
+                              </button>
+                              <button className="btn btn-ghost btn-sm" style={{ color: 'var(--color-danger)' }} onClick={() => { setDeletingId(itemId); setEditingId(null); }} disabled={isEditing || isDeleting} title="Delete">
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

@@ -64,8 +64,7 @@ const registerValidation = [
 
   body('password')
     .notEmpty().withMessage('Password is required')
-    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters')
-    .matches(/\d/).withMessage('Password must contain at least one number'),
+    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
 ];
 
 const loginValidation = [

@@ -96,9 +96,6 @@ export default function Register() {
                 minLength="6"
               />
             </div>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
-              Must be at least 6 characters with at least 1 number.
-            </span>
           </div>
 
           <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: 'var(--space-sm)', justifyContent: 'center' }} disabled={isSubmitting}>

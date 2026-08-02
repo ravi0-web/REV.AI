@@ -6,6 +6,37 @@ Rev.AI instantly classifies guest reviews by **sentiment** (positive / neutral /
 
 ---
 
+## 🌐 Live Deployment & Documentation (Week 9)
+
+| Environment | URL | Status |
+|---|---|---|
+| **Live Frontend** | [https://rev-ai-five-mu.vercel.app](https://rev-ai-five-mu.vercel.app) | 🟢 Live (Vercel) |
+| **Live Backend API** | [https://rev-ai.onrender.com/api](https://rev-ai.onrender.com/api) | 🟢 Live (Render) |
+| **Health Check** | [https://rev-ai.onrender.com/api/health](https://rev-ai.onrender.com/api/health) | 🟢 200 OK |
+
+### 🛠️ Tech Stack Summary
+
+- **Frontend:** React 18, Vite, React Router 7, Chart.js, Lucide Icons, Vanilla CSS Design System
+- **Backend:** Node.js, Express.js (MVC Architecture), Passport.js, JWT, bcryptjs, Helmet, CORS
+- **Database:** MongoDB Atlas (Free M0 Tier), Mongoose 8 ODM
+- **AI Integration:** Google Gemini 2.5 Flash via `@google/genai` / OpenRouter SDK
+- **Hosting & Infrastructure:** Vercel (Frontend), Render (Backend Service), MongoDB Cloud Atlas (Database)
+
+### ⚠️ Known Limitations on Free Tier
+
+1. **Render Free Tier Cold Starts (Backend):**
+   - The backend service on Render automatically spins down after **15 minutes of inactivity**.
+   - The **first request** after an idle period takes **30 to 60 seconds** to wake up and respond.
+   - Subsequent requests process at normal speeds (< 500ms).
+
+2. **MongoDB Atlas M0 Free Tier (Database):**
+   - Storage limit is capped at **512 MB**, which is plenty for thousands of review records.
+   - Connection pool is capped at **100 concurrent connections**.
+
+3. **Gemini AI API Free Tier Quota:**
+   - AI endpoints are rate-limited to **30 requests per 10 minutes** per user to avoid hitting API rate limits.
+   - Fallback mechanisms handle temporary API throttling gracefully.
+
 ## 🧠 Gemini AI Integration (Week 7)
 
 Rev.AI uses **Google Gemini 2.5 Flash** (via OpenRouter) to power its core review analysis engine. Every review submitted by a user is sent to the Gemini API, which returns structured JSON containing sentiment classification, theme detection, and a professional management response.
